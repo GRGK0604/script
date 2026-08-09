@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # ============================================================
-# 交互式 Go 安装/更新/卸载脚本
+# 交互式 Go 安装/更新/卸载脚本（无备份版）
 # 功能：
 #   1. 安装 Go（安装最新稳定版）
 #   2. 更新 Go（升级到最新稳定版）
 #   3. 卸载 Go（移除所有相关文件和配置）
 #   每次运行自动检查当前版本及最新版本
+#   说明：安装/更新时直接覆盖旧版本，不进行备份
 # ============================================================
 
 # 定义颜色
@@ -132,7 +133,6 @@ get_latest_version() {
         log_error "无法获取最新版本信息，请检查网络"
         exit 1
     fi
-    # 返回类似 go1.23.4，去掉 go 前缀
     LATEST_VERSION=$(echo "$latest_raw" | sed 's/go//')
     log_info "最新版本: $LATEST_VERSION"
 }
@@ -171,20 +171,21 @@ download_go() {
     return 0
 }
 
-# 安装指定的 Go 版本（内部使用）
+# ================================================================
+# 安装指定的 Go 版本（内部使用）—— 无备份版
+# ================================================================
 install_go_version() {
     local ver=$1
     enable_error_trap
 
-    # 备份已存在的 Go 安装
+    # 如果已存在 Go 安装，直接删除（不备份）
     if [ -d "$GO_ROOT" ]; then
-        local backup_dir="${GO_ROOT}_backup_$(date '+%Y%m%d_%H%M%S')"
-        log_info "备份现有安装到: $backup_dir"
-        mv "$GO_ROOT" "$backup_dir" || {
-            log_error "备份失败，无法继续安装"
+        log_info "检测到已存在的 Go 安装，将直接删除旧版本"
+        rm -rf "$GO_ROOT" || {
+            log_error "删除旧版本失败，无法继续安装"
             return 1
         }
-        log_info "备份完成"
+        log_info "旧版本已删除"
     fi
 
     # 解压安装
@@ -278,7 +279,6 @@ update_go() {
     fi
 
     log_info "将 Go 从 $CURRENT_VERSION 更新到 $LATEST_VERSION"
-    # 调用安装函数，传入最新版本
     install_go "$LATEST_VERSION"
     return $?
 }
@@ -302,22 +302,18 @@ uninstall_go() {
         return 0
     fi
 
-    # 询问是否保留工作空间
     echo -n "是否保留工作空间目录 $GO_WORKSPACE ？（保留则仅删除内部 bin/pkg/src？）[y/N] "
     read -r keep_workspace
-    disable_error_trap  # 卸载时不触发全局错误陷阱
+    disable_error_trap
 
-    # 删除 Go 根目录
     if [ -d "$GO_ROOT" ]; then
         rm -rf "$GO_ROOT" && log_info "已删除 $GO_ROOT" || log_warn "删除 $GO_ROOT 失败"
     fi
 
-    # 删除环境变量文件
     if [ -f "/etc/profile.d/go.sh" ]; then
         rm -f "/etc/profile.d/go.sh" && log_info "已删除 /etc/profile.d/go.sh" || log_warn "删除 /etc/profile.d/go.sh 失败"
     fi
 
-    # 处理工作空间
     if [[ "$keep_workspace" =~ ^[Yy]$ ]]; then
         log_info "保留工作空间目录，但清空内部 src/pkg/bin"
         if [ -d "$GO_WORKSPACE" ]; then
@@ -361,7 +357,7 @@ show_post_install_help() {
 show_menu() {
     clear
     echo -e "${BLUE}===============================================${NC}"
-    echo -e "${BLUE}          Go 版本管理交互工具${NC}"
+    echo -e "${BLUE}          Go 版本管理交互工具（无备份）${NC}"
     echo -e "${BLUE}===============================================${NC}"
     echo -e "当前安装版本: ${YELLOW}${CURRENT_VERSION}${NC}"
     echo -e "官方最新版本: ${GREEN}${LATEST_VERSION}${NC}"
@@ -376,7 +372,6 @@ show_menu() {
 
 # 主循环
 main() {
-    # 初始化
     check_root
     detect_os_and_install_deps
     get_current_version
