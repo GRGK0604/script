@@ -98,10 +98,6 @@ nm_set_mtu() {
         nmcli connection modify "$1" 802-11-wireless.mtu "$2" 2>/dev/null
 }
 
-backup_if_file() {
-    cp "$IF_FILE" "$IF_FILE.mtu.bak.$(date +%F-%H%M%S)"
-}
-
 # 删除 interfaces 中指定接口段内已有的 mtu 行，避免重复叠加
 if_file_del_mtu() {
     sed -i "/^iface $1/,/^$/{/^[[:space:]]*mtu /d}" "$IF_FILE"
@@ -257,7 +253,6 @@ EOF
             ;;
 
         interfaces)
-            backup_if_file
             if grep -q "^iface $iface" "$IF_FILE"; then
                 if_file_del_mtu "$iface"
                 sed -i "/^iface $iface/a\\    mtu $mtu" "$IF_FILE"
@@ -269,7 +264,7 @@ iface $iface inet dhcp
     mtu $mtu
 EOF
             fi
-            echo "${GREEN}✅ $IF_FILE 已更新（已备份）${RESET}"
+            echo "${GREEN}✅ $IF_FILE 已更新${RESET}"
             read -rp "是否重启 networking 服务？(y/N): " reconnect
             [[ "$reconnect" =~ ^[Yy]$ ]] && systemctl restart networking 2>/dev/null
             ;;
@@ -397,9 +392,8 @@ clean_persist() {
             grep -nE "^[[:space:]]*mtu " "$IF_FILE" | sed 's/^/  /' || echo "  无 mtu 配置"
             read -rp "确认删除 $SELECTED_IF 段内的 mtu 行？(y/N): " confirm
             if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                backup_if_file
                 if_file_del_mtu "$SELECTED_IF"
-                echo "${GREEN}✅ 已删除（原文件已备份），重启后生效${RESET}"
+                echo "${GREEN}✅ 已删除，重启后生效${RESET}"
             fi
             ;;
 
