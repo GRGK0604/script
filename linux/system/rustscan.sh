@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 遇到错误立即退出，但后续 dpkg 安装部分会单独处理
-set -e
+# 遇到错误继续执行，依靠后续的错误判断和依赖修复
+set +e
 
 # 颜色定义
 GREEN='\033[0;32m'
@@ -9,30 +9,18 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # 恢复默认颜色
 
-echo -e "${GREEN}=== RustScan 2.4.1 一键安装脚本 ===${NC}"
+echo -e "${GREEN}=== RustScan 自动最新版安装脚本 ===${NC}"
 
 # 1. 检查 Root 权限
 if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}❌ 错误: 请使用 root 权限运行此脚本 (例如: sudo bash install_rustscan.sh)${NC}"
+  echo -e "${RED}❌ 错误: 请使用 root 权限运行此脚本 (例如: sudo bash install_rustscan_latest.sh)${NC}"
   exit 1
 fi
 
-# 2. 变量配置
-DOWNLOAD_URL="https://github.com/bee-san/RustScan/releases/download/2.4.1/rustscan.deb.zip"
-ZIP_FILE="rustscan.deb.zip"
-TEMP_DIR=$(mktemp -d)
-
-# 设置退出时自动清理临时目录
-cleanup() {
-  echo -e "\n${YELLOW}🧹 正在清理临时文件...${NC}"
-  rm -rf "$TEMP_DIR"
-}
-trap cleanup EXIT
-
-# 3. 检查并安装基础依赖 (wget, unzip, nmap)
+# 2. 检查并安装基础依赖 (wget, unzip, curl, jq, nmap)
 echo -e "\n${YELLOW}[1/4] 正在检查系统依赖...${NC}"
 apt-get update -qq
-for cmd in wget unzip nmap; do
+for cmd in wget unzip curl jq nmap; do
   if ! command -v $cmd &> /dev/null; then
     echo -e "未找到 $cmd，正在自动安装..."
     apt-get install -y $cmd > /dev/null
@@ -41,43 +29,61 @@ for cmd in wget unzip nmap; do
   fi
 done
 
-# 4. 下载文件
-echo -e "\n${YELLOW}[2/4] 正在下载 RustScan 2.4.1...${NC}"
-cd "$TEMP_DIR"
-wget -q --show-progress "$DOWNLOAD_URL" -O "$ZIP_FILE"
+# 3. 动态获取最新版本号
+echo -e "\n${YELLOW}[2/4] 正在查询 GitHub 最新版本...${NC}"
+# 使用 GitHub API 获取 latest release 的 tag_name
+LATEST_VERSION=$(curl -s https://api.github.com/repos/bee-san/RustScan/releases/latest | jq -r .tag_name)
 
-# 5. 解压并安装
-echo -e "\n${YELLOW}[3/4] 正在解压并安装...${NC}"
-unzip -q "$ZIP_FILE"
-DEB_FILE=$(ls *.deb 2>/dev/null | head -n 1)
-
-if [ -z "$DEB_FILE" ]; then
-  echo -e "${RED}❌ 错误: 解压后未找到 .deb 文件${NC}"
+# 检查是否成功获取版本号（防止网络问题或 API 限流）
+if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" == "null" ]; then
+  echo -e "${RED}❌ 错误: 无法获取最新版本号，可能触发了 GitHub API 限制或网络问题。${NC}"
+  echo -e "请稍后再试，或者手动前往 GitHub 查看最新版本。"
   exit 1
 fi
 
-echo -e "找到安装包: $DEB_FILE"
-# 暂时关闭 set -e 以便手动处理 dpkg 的依赖报错
-set +e
-dpkg -i "$DEB_FILE"
-DPKG_STATUS=$?
-set -e
+echo -e "✅ 检测到最新版本: ${GREEN}${LATEST_VERSION}${NC}"
 
-# 如果 dpkg 安装失败，尝试自动修复依赖
-if [ $DPKG_STATUS -ne 0 ]; then
-  echo -e "${YELLOW}⚠️ 检测到依赖缺失，正在尝试自动修复...${NC}"
-  apt-get install -f -y
+# 4. 下载并解压
+DOWNLOAD_URL="https://github.com/bee-san/RustScan/releases/download/${LATEST_VERSION}/rustscan.deb.zip"
+TMP_DIR=$(mktemp -d)
+ZIP_FILE="rustscan.deb.zip"
+
+echo -e "\n${YELLOW}[3/4] 正在下载 RustScan ${LATEST_VERSION}...${NC}"
+wget -q --show-progress "$DOWNLOAD_URL" -O "$TMP_DIR/$ZIP_FILE"
+
+if [ $? -ne 0 ]; then
+  echo -e "${RED}❌ 错误: 文件下载失败，请检查网络连接。${NC}"
+  rm -rf "$TMP_DIR"
+  exit 1
 fi
 
+echo -e "正在解压安装包..."
+unzip -q "$TMP_DIR/$ZIP_FILE" -d "$TMP_DIR"
+DEB_FILE=$(ls "$TMP_DIR"/*.deb 2>/dev/null | head -n 1)
+
+if [ -z "$DEB_FILE" ]; then
+  echo -e "${RED}❌ 错误: 解压后未找到 .deb 文件${NC}"
+  rm -rf "$TMP_DIR"
+  exit 1
+fi
+
+# 5. 安装并自动修复依赖
+echo -e "\n${YELLOW}[4/4] 正在安装并修复依赖...${NC}"
+dpkg -i "$DEB_FILE"
+# 无论 dpkg 是否报错，都运行一次 -f 尝试修复缺失的依赖
+apt-get install -f -y
+
+# 清理临时文件
+echo -e "\n${YELLOW}🧹 正在清理临时文件...${NC}"
+rm -rf "$TMP_DIR"
+
 # 6. 验证安装
-echo -e "\n${YELLOW}[4/4] 正在验证安装结果...${NC}"
 if command -v rustscan &> /dev/null; then
-  echo -e "${GREEN}🎉 RustScan 安装成功！${NC}"
+  echo -e "\n${GREEN}🎉 RustScan ${LATEST_VERSION} 安装成功！${NC}"
   echo "----------------------------------------"
   rustscan --version
   echo "----------------------------------------"
-  echo -e "💡 提示: RustScan 需要配合 Nmap 使用，系统已为你准备好。"
-  echo -e "你可以尝试运行: ${GREEN}rustscan -a 127.0.0.1${NC}"
+  echo -e "💡 提示: 如果之前设置过 Docker 别名导致冲突，请运行 ${YELLOW}unalias rustscan${NC} 或删除 ~/.bashrc 中的相关配置。"
 else
   echo -e "${RED}❌ 安装失败，未找到 rustscan 命令。请检查上方报错信息。${NC}"
   exit 1
